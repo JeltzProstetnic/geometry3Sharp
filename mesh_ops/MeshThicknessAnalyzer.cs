@@ -126,8 +126,9 @@ namespace gs
                 return double.MaxValue;  // degenerate normal, skip vertex
 
             // Cast ray in opposite direction of normal (inward)
-            Vector3d rayOrigin = pos + normal * NormalOffset;
+            // Offset origin ALONG the ray direction to skip past the originating surface
             Vector3d rayDir = -normal;
+            Vector3d rayOrigin = pos + rayDir * NormalOffset;
 
             Ray3d ray = new Ray3d(rayOrigin, rayDir);
 
@@ -140,9 +141,8 @@ namespace gs
             // Get actual intersection distance
             IntrRay3Triangle3 intr = MeshQueries.TriangleIntersection(Mesh, hitTID, ray);
             if (intr.Find()) {
-                // Distance is the ray parameter, which represents distance along ray
-                // Subtract the offset we added
-                return Math.Max(0, intr.RayParameter - NormalOffset);
+                // Distance is the ray parameter, plus the offset we skipped
+                return Math.Max(0, intr.RayParameter + NormalOffset);
             }
 
             return double.MaxValue;

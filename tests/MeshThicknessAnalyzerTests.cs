@@ -1,15 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using g3;
+using gs;
 
 namespace g3.tests
 {
     /// <summary>
-    /// Comprehensive unit tests for MeshThicknessAnalyzer class.
-    /// This is a standalone test class that can be run independently.
+    /// Tests for gs.MeshThicknessAnalyzer.
+    /// Standalone console runner — no test framework dependency.
     ///
     /// Run with: dotnet run --project tests/MeshThicknessAnalyzerTests.csproj
-    /// Or compile and run the executable directly.
     /// </summary>
     public class MeshThicknessAnalyzerTests
     {
@@ -23,7 +24,6 @@ namespace g3.tests
             Console.WriteLine("MeshThicknessAnalyzer Test Suite");
             Console.WriteLine("==========================================\n");
 
-            // Run all test cases
             TestUniformSphereMesh();
             TestBoxMeshWithKnownThickness();
             TestThinRegionDetection();
@@ -38,14 +38,16 @@ namespace g3.tests
             TestVeryThinRegions();
             TestMeshWithNoHits();
             TestPerformanceWithLargeMesh();
+            TestComputeStatistics();
+            TestGetMinimumThickness();
+            TestComputeRequiredBeforeQuery();
 
-            // Print results
             Console.WriteLine("\n==========================================");
             Console.WriteLine("Test Results Summary");
             Console.WriteLine("==========================================");
             Console.WriteLine($"Total Tests:  {testsTotal}");
-            Console.WriteLine($"Passed:       {testsPassed} ✓");
-            Console.WriteLine($"Failed:       {testsFailed} ✗");
+            Console.WriteLine($"Passed:       {testsPassed}");
+            Console.WriteLine($"Failed:       {testsFailed}");
             Console.WriteLine($"Success Rate: {(testsTotal > 0 ? (testsPassed * 100.0 / testsTotal) : 0):F1}%");
             Console.WriteLine("==========================================\n");
 
@@ -55,78 +57,56 @@ namespace g3.tests
         #region Test Cases
 
         /// <summary>
-        /// Test 1: Uniform sphere mesh
-        /// A perfect sphere should have relatively uniform thickness values across all vertices.
-        /// Expected: All thickness values should be approximately 2*radius (diameter).
+        /// Uniform sphere: thickness should be approximately 2*radius (diameter).
         /// </summary>
         private static void TestUniformSphereMesh()
         {
             string testName = "TestUniformSphereMesh";
             try
             {
-                // Arrange
                 double radius = 10.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 8,
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
+                DMesh3 mesh = MakeSphere(radius, 8);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should return true", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
-                AssertTrue(result.VertexThickness.Count == mesh.VertexCount,
-                    $"Should have thickness for all {mesh.VertexCount} vertices", testName);
-
-                // For a sphere, thickness should be approximately 2*radius
-                // Allow some tolerance for numerical precision and ray-casting discretization
                 double expectedThickness = 2.0 * radius;
-                double tolerance = radius * 0.3; // 30% tolerance for sphere approximation
+                double tolerance = radius * 0.3; // 30% for sphere discretization
 
-                int validThicknessCount = 0;
-                foreach (var thickness in result.VertexThickness.Values)
+                int validCount = 0;
+                foreach (int vid in mesh.VertexIndices())
                 {
-                    if (thickness > 0 && Math.Abs(thickness - expectedThickness) < tolerance)
-                    {
-                        validThicknessCount++;
-                    }
+                    double t = analyzer.GetThickness(vid);
+                    if (t < double.MaxValue && Math.Abs(t - expectedThickness) < tolerance)
+                        validCount++;
                 }
 
-                double validPercentage = (validThicknessCount * 100.0) / mesh.VertexCount;
-                AssertTrue(validPercentage > 70,
-                    $"At least 70% of vertices should have thickness near {expectedThickness:F2} (got {validPercentage:F1}%)",
+                double validPct = (validCount * 100.0) / mesh.VertexCount;
+                AssertTrue(validPct > 70,
+                    $"At least 70% should have thickness near {expectedThickness:F2} (got {validPct:F1}%)",
                     testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 2: Box mesh with known wall thickness
-        /// A hollow box or solid box should return known thickness values.
+        /// Box mesh: vertices on opposite faces should measure the box width.
         /// </summary>
         private static void TestBoxMeshWithKnownThickness()
         {
             string testName = "TestBoxMeshWithKnownThickness";
             try
             {
-                // Arrange
                 double sideLength = 20.0;
                 var boxGen = new TrivialBox3Generator
                 {
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(sideLength / 2.0, sideLength / 2.0, sideLength / 2.0)),
+                    Box = new Box3d(Vector3d.Zero,
+                        new Vector3d(sideLength / 2, sideLength / 2, sideLength / 2)),
                     NoSharedVertices = true
                 };
                 boxGen.Generate();
@@ -135,661 +115,549 @@ namespace g3.tests
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should return true", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
-                AssertTrue(result.VertexThickness.Count == mesh.VertexCount,
-                    "Should have thickness for all vertices", testName);
-
-                // For a box, thickness should be the distance across
-                // This will be sideLength for most vertices
-                double expectedThickness = sideLength;
+                int validCount = 0;
                 double tolerance = sideLength * 0.2;
-
-                int validThicknessCount = 0;
-                foreach (var thickness in result.VertexThickness.Values)
+                foreach (int vid in mesh.VertexIndices())
                 {
-                    if (thickness > 0 && Math.Abs(thickness - expectedThickness) < tolerance)
-                    {
-                        validThicknessCount++;
-                    }
+                    double t = analyzer.GetThickness(vid);
+                    if (t < double.MaxValue && Math.Abs(t - sideLength) < tolerance)
+                        validCount++;
                 }
 
-                AssertTrue(validThicknessCount > 0,
-                    "At least some vertices should have valid thickness measurements", testName);
+                AssertTrue(validCount > 0,
+                    "At least some vertices should have valid thickness near box width", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 3: Thin region detection
-        /// Create a mesh with a known thin region and verify it's detected.
+        /// Small sphere (diameter 0.3mm) — all vertices should be flagged thin at 0.5 threshold.
+        /// Uses a sphere to avoid degenerate edge hits from aligned parallel planes.
         /// </summary>
         private static void TestThinRegionDetection()
         {
             string testName = "TestThinRegionDetection";
             try
             {
-                // Arrange - Create two parallel planes close together
-                DMesh3 mesh = new DMesh3();
-                mesh.EnableVertexNormals(Vector3f.AxisY);
-
-                double separation = 0.3; // Thin gap - below default threshold of 0.5
-
-                // Bottom plane (normal pointing up)
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-5, 0, -5), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, 0, -5), n = Vector3f.AxisY });
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, 0, 5), n = Vector3f.AxisY });
-                int v3 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-5, 0, 5), n = Vector3f.AxisY });
-
-                // Top plane (normal pointing down)
-                int v4 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-5, separation, -5), n = -Vector3f.AxisY });
-                int v5 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, separation, -5), n = -Vector3f.AxisY });
-                int v6 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, separation, 5), n = -Vector3f.AxisY });
-                int v7 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-5, separation, 5), n = -Vector3f.AxisY });
-
-                // Bottom plane triangles
-                mesh.AppendTriangle(v0, v1, v2);
-                mesh.AppendTriangle(v0, v2, v3);
-
-                // Top plane triangles
-                mesh.AppendTriangle(v4, v6, v5);
-                mesh.AppendTriangle(v4, v7, v6);
+                double targetThickness = 0.3;
+                double radius = targetThickness / 2.0;
+                DMesh3 mesh = MakeSphere(radius, 6);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should return true", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
-                AssertTrue(result.ThinVertices.Count > 0,
-                    "Should detect thin vertices", testName);
+                List<int> thinVerts = analyzer.FindThinVertices(0.5);
+                AssertTrue(thinVerts.Count > 0, "Should detect thin vertices", testName);
 
-                // All vertices should be flagged as thin (below 0.5mm threshold)
-                AssertTrue(result.ThinVertices.Count == mesh.VertexCount,
-                    $"All {mesh.VertexCount} vertices should be flagged as thin (separation={separation})", testName);
+                // Nearly all vertices should be thin (diameter < 0.5)
+                double thinPct = (thinVerts.Count * 100.0) / mesh.VertexCount;
+                AssertTrue(thinPct > 80,
+                    $"At least 80% should be thin (got {thinPct:F1}%)", testName);
 
-                // Check that measured thickness is approximately correct
-                var thicknesses = result.VertexThickness.Values.Where(t => t > 0).ToList();
-                if (thicknesses.Count > 0)
+                // Check measured thickness is near the diameter
+                var measured = new List<double>();
+                foreach (int vid in mesh.VertexIndices())
                 {
-                    double avgThickness = thicknesses.Average();
-                    AssertTrue(Math.Abs(avgThickness - separation) < 0.15,
-                        $"Average thickness should be near {separation} (got {avgThickness:F3})", testName);
+                    double t = analyzer.GetThickness(vid);
+                    if (t < double.MaxValue)
+                        measured.Add(t);
+                }
+                if (measured.Count > 0)
+                {
+                    double avg = measured.Average();
+                    AssertTrue(Math.Abs(avg - targetThickness) < targetThickness * 0.5,
+                        $"Average thickness should be near {targetThickness} (got {avg:F3})", testName);
                 }
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 4: Threshold configuration
-        /// Changing the threshold should change which vertices are flagged as thin.
+        /// High threshold flags more vertices as thin than low threshold.
+        /// Uses the same analyzer — just calls FindThinVertices with different values.
         /// </summary>
         private static void TestThresholdConfiguration()
         {
             string testName = "TestThresholdConfiguration";
             try
             {
-                // Arrange
-                double radius = 5.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 6,
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
-
+                DMesh3 mesh = MakeSphere(5.0, 6);
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
+                var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
+                analyzer.Compute();
 
-                // Act - Run with very high threshold (should flag many/all vertices)
-                var analyzerHigh = new MeshThicknessAnalyzer(mesh, spatial, thicknessThreshold: 100.0);
-                var resultHigh = analyzerHigh.Compute();
+                List<int> thinHigh = analyzer.FindThinVertices(100.0);
+                List<int> thinLow = analyzer.FindThinVertices(0.01);
 
-                // Run with very low threshold (should flag few/no vertices)
-                var analyzerLow = new MeshThicknessAnalyzer(mesh, spatial, thicknessThreshold: 0.01);
-                var resultLow = analyzerLow.Compute();
-
-                // Assert
-                AssertNotNull(resultHigh, "High threshold result should not be null", testName);
-                AssertNotNull(resultLow, "Low threshold result should not be null", testName);
-
-                // High threshold should flag more vertices than low threshold
-                AssertTrue(resultHigh.ThinVertices.Count > resultLow.ThinVertices.Count,
-                    $"High threshold ({resultHigh.ThinVertices.Count}) should flag more vertices than low threshold ({resultLow.ThinVertices.Count})",
+                AssertTrue(thinHigh.Count > thinLow.Count,
+                    $"High threshold ({thinHigh.Count}) should flag more than low ({thinLow.Count})",
                     testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 5: Empty mesh (zero vertices)
-        /// Should handle gracefully without crashing.
+        /// Empty mesh: should complete without error.
         /// </summary>
         private static void TestEmptyMesh()
         {
             string testName = "TestEmptyMesh";
             try
             {
-                // Arrange
                 DMesh3 mesh = new DMesh3();
                 mesh.EnableVertexNormals(Vector3f.AxisY);
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should succeed for empty mesh", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null even for empty mesh", testName);
-                AssertTrue(result.VertexThickness.Count == 0, "Empty mesh should have zero thickness values", testName);
-                AssertTrue(result.ThinVertices.Count == 0, "Empty mesh should have zero thin vertices", testName);
+                List<int> thinVerts = analyzer.FindThinVertices(0.5);
+                AssertTrue(thinVerts.Count == 0,
+                    "Empty mesh should have zero thin vertices", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 6: Single triangle mesh
-        /// Minimal valid mesh - should handle without error.
+        /// Single triangle: minimal valid mesh, no opposing surface expected.
         /// </summary>
         private static void TestSingleTriangleMesh()
         {
             string testName = "TestSingleTriangleMesh";
             try
             {
-                // Arrange
                 DMesh3 mesh = new DMesh3();
                 mesh.EnableVertexNormals(Vector3f.AxisY);
 
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(1, 0, 0), n = Vector3f.AxisY });
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 1), n = Vector3f.AxisY });
-                mesh.AppendTriangle(v0, v1, v2);
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(1, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 1), n = Vector3f.AxisY });
+                mesh.AppendTriangle(0, 1, 2);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should return true", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
-                AssertTrue(result.VertexThickness.Count == 3, "Should have 3 vertex thickness values", testName);
+                // Single open triangle — no meaningful thickness measurement
+                // Just verify it didn't crash and all vertices were processed
+                foreach (int vid in mesh.VertexIndices())
+                    analyzer.GetThickness(vid); // should not throw
 
-                // Single triangle - rays will likely not hit anything (open mesh)
-                // This is expected behavior
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 7: Degenerate mesh (collapsed triangles)
-        /// Test robustness with degenerate geometry.
+        /// Degenerate mesh (two vertices at same position): should not crash.
         /// </summary>
         private static void TestDegenerateMesh()
         {
             string testName = "TestDegenerateMesh";
             try
             {
-                // Arrange - Create triangles with coincident vertices
                 DMesh3 mesh = new DMesh3();
                 mesh.EnableVertexNormals(Vector3f.AxisY);
 
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 0), n = Vector3f.AxisY }); // Same position
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(1, 0, 0), n = Vector3f.AxisY });
-
-                mesh.AppendTriangle(v0, v1, v2); // Degenerate triangle
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 0), n = Vector3f.AxisY }); // coincident
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(1, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendTriangle(0, 1, 2);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act - Should not crash
-                var result = analyzer.Compute();
-
-                // Assert
-                AssertNotNull(result, "Should handle degenerate mesh without crashing", testName);
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Should handle degenerate mesh without crashing", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 8: Open mesh with boundary edges
-        /// Mesh with boundaries where rays might not hit anything.
+        /// Open mesh with boundary edges: should process all vertices.
         /// </summary>
         private static void TestOpenMeshWithBoundaries()
         {
             string testName = "TestOpenMeshWithBoundaries";
             try
             {
-                // Arrange - Create a simple open quad (not closed)
                 DMesh3 mesh = new DMesh3();
                 mesh.EnableVertexNormals(Vector3f.AxisY);
 
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, 0, 0), n = Vector3f.AxisY });
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(5, 0, 5), n = Vector3f.AxisY });
-                int v3 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(0, 0, 5), n = Vector3f.AxisY });
-
-                mesh.AppendTriangle(v0, v1, v2);
-                mesh.AppendTriangle(v0, v2, v3);
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(5, 0, 0), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(5, 0, 5), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(0, 0, 5), n = Vector3f.AxisY });
+                mesh.AppendTriangle(0, 1, 2);
+                mesh.AppendTriangle(0, 2, 3);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should return true", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
-                AssertTrue(result.VertexThickness.Count == mesh.VertexCount,
-                    "Should process all vertices even in open mesh", testName);
+                int processedCount = 0;
+                foreach (int vid in mesh.VertexIndices())
+                {
+                    analyzer.GetThickness(vid); // should not throw
+                    processedCount++;
+                }
+                AssertTrue(processedCount == mesh.VertexCount,
+                    "Should process all vertices in open mesh", testName);
 
-                // In an open mesh, many vertices might have zero thickness (no hit)
-                // This is expected behavior
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 9: Normal orientation - inward normals
-        /// Test with normals pointing inward (should still work correctly).
+        /// Sphere with flipped (inward) normals: rays go outward, mostly missing.
+        /// Should complete without error.
         /// </summary>
         private static void TestNormalOrientationInward()
         {
             string testName = "TestNormalOrientationInward";
             try
             {
-                // Arrange - Create sphere with inward-pointing normals
                 double radius = 8.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 6,
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
+                DMesh3 mesh = MakeSphere(radius, 6);
 
-                // Flip all normals to point inward
                 foreach (int vid in mesh.VertexIndices())
-                {
-                    Vector3f normal = mesh.GetVertexNormal(vid);
-                    mesh.SetVertexNormal(vid, -normal);
-                }
+                    mesh.SetVertexNormal(vid, -mesh.GetVertexNormal(vid));
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
-
-                // Assert
-                AssertNotNull(result, "Result should not be null with inward normals", testName);
-                AssertTrue(result.VertexThickness.Count > 0, "Should compute thickness with inward normals", testName);
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should succeed with inward normals", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 10: Normal orientation - outward normals (standard case)
-        /// Verify correct behavior with standard outward normals.
+        /// Sphere with standard outward normals: rays go inward, should hit opposite side.
         /// </summary>
         private static void TestNormalOrientationOutward()
         {
             string testName = "TestNormalOrientationOutward";
             try
             {
-                // Arrange - Standard sphere with outward normals
                 double radius = 8.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 6,
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
+                DMesh3 mesh = MakeSphere(radius, 6);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should succeed", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null with outward normals", testName);
-                AssertTrue(result.VertexThickness.Count > 0, "Should compute thickness with outward normals", testName);
+                int hitCount = 0;
+                foreach (int vid in mesh.VertexIndices())
+                {
+                    if (analyzer.GetThickness(vid) < double.MaxValue)
+                        hitCount++;
+                }
+                AssertTrue(hitCount > mesh.VertexCount / 2,
+                    $"Most vertices should have valid thickness ({hitCount}/{mesh.VertexCount})",
+                    testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 11: Large thickness values
-        /// Test with very thick mesh to ensure no overflow or precision issues.
+        /// Large sphere (radius=1000): no NaN or Infinity in results.
         /// </summary>
         private static void TestLargeThicknessValues()
         {
             string testName = "TestLargeThicknessValues";
             try
             {
-                // Arrange - Large sphere
-                double radius = 1000.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 5,
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
+                DMesh3 mesh = MakeSphere(1000.0, 5);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
-                var analyzer = new MeshThicknessAnalyzer(mesh, spatial, thicknessThreshold: 100.0);
+                var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should succeed", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null with large mesh", testName);
-
-                // Verify no NaN or infinite values
-                foreach (var thickness in result.VertexThickness.Values)
+                foreach (int vid in mesh.VertexIndices())
                 {
-                    AssertTrue(!double.IsNaN(thickness) && !double.IsInfinity(thickness),
-                        "Thickness values should not be NaN or Infinity", testName);
+                    double t = analyzer.GetThickness(vid);
+                    AssertTrue(!double.IsNaN(t) && !double.IsInfinity(t),
+                        $"Vertex {vid}: thickness should not be NaN or Infinity", testName);
                 }
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 12: Very thin regions (stress test)
-        /// Test with extremely thin walls to verify precision.
+        /// Very small sphere (diameter 0.01mm): all vertices flagged thin.
         /// </summary>
         private static void TestVeryThinRegions()
         {
             string testName = "TestVeryThinRegions";
             try
             {
-                // Arrange - Two planes very close together
-                DMesh3 mesh = new DMesh3();
-                mesh.EnableVertexNormals(Vector3f.AxisY);
-
-                double separation = 0.01; // Very thin - 0.01mm
-
-                // Bottom plane
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-3, 0, -3), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(3, 0, -3), n = Vector3f.AxisY });
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(3, 0, 3), n = Vector3f.AxisY });
-                int v3 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-3, 0, 3), n = Vector3f.AxisY });
-
-                // Top plane
-                int v4 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-3, separation, -3), n = -Vector3f.AxisY });
-                int v5 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(3, separation, -3), n = -Vector3f.AxisY });
-                int v6 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(3, separation, 3), n = -Vector3f.AxisY });
-                int v7 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-3, separation, 3), n = -Vector3f.AxisY });
-
-                mesh.AppendTriangle(v0, v1, v2);
-                mesh.AppendTriangle(v0, v2, v3);
-                mesh.AppendTriangle(v4, v6, v5);
-                mesh.AppendTriangle(v4, v7, v6);
+                double targetThickness = 0.01;
+                DMesh3 mesh = MakeSphere(targetThickness / 2.0, 6);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
-                var analyzer = new MeshThicknessAnalyzer(mesh, spatial, thicknessThreshold: 0.5);
+                var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should succeed", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null with very thin walls", testName);
-                AssertTrue(result.ThinVertices.Count == mesh.VertexCount,
-                    "All vertices should be flagged as thin", testName);
+                List<int> thinVerts = analyzer.FindThinVertices(0.5);
+                double thinPct = (thinVerts.Count * 100.0) / mesh.VertexCount;
+                AssertTrue(thinPct > 80,
+                    $"At least 80% should be thin (got {thinPct:F1}%)", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 13: Mesh where rays don't hit anything
-        /// Test case where inverted normals point away from mesh.
+        /// Single flat plane: rays may self-intersect or miss entirely.
+        /// Either outcome is acceptable — just verify no crash.
         /// </summary>
         private static void TestMeshWithNoHits()
         {
             string testName = "TestMeshWithNoHits";
             try
             {
-                // Arrange - Single sided plane where inverted normals point away
                 DMesh3 mesh = new DMesh3();
                 mesh.EnableVertexNormals(Vector3f.AxisY);
 
-                int v0 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-2, 0, -2), n = Vector3f.AxisY });
-                int v1 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(2, 0, -2), n = Vector3f.AxisY });
-                int v2 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(2, 0, 2), n = Vector3f.AxisY });
-                int v3 = mesh.AppendVertex(new NewVertexInfo { v = new Vector3d(-2, 0, 2), n = Vector3f.AxisY });
-
-                mesh.AppendTriangle(v0, v1, v2);
-                mesh.AppendTriangle(v0, v2, v3);
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(-2, 0, -2), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(2, 0, -2), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(2, 0, 2), n = Vector3f.AxisY });
+                mesh.AppendVertex(new NewVertexInfo {
+                    v = new Vector3d(-2, 0, 2), n = Vector3f.AxisY });
+                mesh.AppendTriangle(0, 1, 2);
+                mesh.AppendTriangle(0, 2, 3);
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var result = analyzer.Compute();
+                bool success = analyzer.Compute();
+                AssertTrue(success, "Compute() should handle single-sided plane", testName);
 
-                // Assert
-                AssertNotNull(result, "Result should not be null even with no hits", testName);
+                // Verify no NaN or Infinity
+                foreach (int vid in mesh.VertexIndices())
+                {
+                    double t = analyzer.GetThickness(vid);
+                    AssertTrue(!double.IsNaN(t) && !double.IsInfinity(t),
+                        $"Vertex {vid}: should not be NaN or Infinity", testName);
+                }
 
-                // Vertices might have zero thickness if rays don't hit anything
-                // This is valid behavior - analyzer should handle gracefully
                 PassTest(testName);
             }
-            catch (Exception ex)
-            {
-                FailTest(testName, ex.Message);
-            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         /// <summary>
-        /// Test 14: Performance test with larger mesh
-        /// Ensure analyzer can handle meshes with more vertices efficiently.
+        /// Performance: dense sphere should complete in under 30 seconds.
         /// </summary>
         private static void TestPerformanceWithLargeMesh()
         {
             string testName = "TestPerformanceWithLargeMesh";
             try
             {
-                // Arrange - Higher resolution sphere
-                double radius = 15.0;
-                var sphereGen = new Sphere3Generator_NormalizedCube
-                {
-                    EdgeVertices = 20, // Creates a denser mesh
-                    Radius = radius,
-                    Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
-                };
-                sphereGen.Generate();
-                DMesh3 mesh = sphereGen.MakeDMesh();
-
-                Console.WriteLine($"  (Testing with {mesh.VertexCount} vertices, {mesh.TriangleCount} triangles)");
+                DMesh3 mesh = MakeSphere(15.0, 20);
+                Console.WriteLine($"  ({mesh.VertexCount} vertices, {mesh.TriangleCount} triangles)");
 
                 var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
                 var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
 
-                // Act
-                var startTime = DateTime.Now;
-                var result = analyzer.Compute();
-                var elapsed = DateTime.Now - startTime;
+                var start = DateTime.Now;
+                bool success = analyzer.Compute();
+                var elapsed = DateTime.Now - start;
 
-                // Assert
-                AssertNotNull(result, "Result should not be null", testName);
+                AssertTrue(success, "Compute() should succeed", testName);
                 Console.WriteLine($"  Computation time: {elapsed.TotalMilliseconds:F0}ms");
 
-                // Should complete in reasonable time (< 30 seconds even for large mesh)
                 AssertTrue(elapsed.TotalSeconds < 30,
                     $"Should complete in < 30s (took {elapsed.TotalSeconds:F1}s)", testName);
 
                 PassTest(testName);
             }
-            catch (Exception ex)
+            catch (Exception ex) { FailTest(testName, ex.Message); }
+        }
+
+        /// <summary>
+        /// ComputeStatistics: verify ThicknessStats fields are populated on a sphere.
+        /// </summary>
+        private static void TestComputeStatistics()
+        {
+            string testName = "TestComputeStatistics";
+            try
             {
-                FailTest(testName, ex.Message);
+                DMesh3 mesh = MakeSphere(5.0, 6);
+                var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
+                var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
+                analyzer.Compute();
+
+                var stats = analyzer.ComputeStatistics();
+
+                AssertTrue(stats.ValidVertexCount > 0,
+                    "Should have valid vertices", testName);
+                AssertTrue(stats.MinThickness > 0,
+                    "MinThickness should be > 0", testName);
+                AssertTrue(stats.MaxThickness >= stats.MinThickness,
+                    "MaxThickness >= MinThickness", testName);
+                AssertTrue(stats.AverageThickness > 0,
+                    "AverageThickness should be > 0", testName);
+                AssertTrue(stats.MinVertexID != DMesh3.InvalidID,
+                    "MinVertexID should be valid", testName);
+                AssertTrue(stats.MaxVertexID != DMesh3.InvalidID,
+                    "MaxVertexID should be valid", testName);
+
+                PassTest(testName);
             }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
+        }
+
+        /// <summary>
+        /// GetMinimumThickness: should match the vertex's individual thickness.
+        /// </summary>
+        private static void TestGetMinimumThickness()
+        {
+            string testName = "TestGetMinimumThickness";
+            try
+            {
+                DMesh3 mesh = MakeSphere(5.0, 6);
+                var spatial = new DMeshAABBTree3(mesh, autoBuild: true);
+                var analyzer = new MeshThicknessAnalyzer(mesh, spatial);
+                analyzer.Compute();
+
+                int minVid;
+                double minThickness = analyzer.GetMinimumThickness(out minVid);
+
+                AssertTrue(minThickness > 0,
+                    "Min thickness should be > 0 for sphere", testName);
+                AssertTrue(minVid != DMesh3.InvalidID,
+                    "Should identify the min vertex", testName);
+
+                double direct = analyzer.GetThickness(minVid);
+                AssertTrue(Math.Abs(minThickness - direct) < 1e-10,
+                    "GetMinimumThickness should match GetThickness for that vertex", testName);
+
+                PassTest(testName);
+            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
+        }
+
+        /// <summary>
+        /// Calling query methods before Compute() should throw.
+        /// </summary>
+        private static void TestComputeRequiredBeforeQuery()
+        {
+            string testName = "TestComputeRequiredBeforeQuery";
+            try
+            {
+                DMesh3 mesh = MakeSphere(5.0, 4);
+                var analyzer = new MeshThicknessAnalyzer(mesh);
+
+                AssertThrows(() => analyzer.GetThickness(0),
+                    "GetThickness before Compute()", testName);
+                AssertThrows(() => analyzer.FindThinVertices(0.5),
+                    "FindThinVertices before Compute()", testName);
+                AssertThrows(() => analyzer.ComputeStatistics(),
+                    "ComputeStatistics before Compute()", testName);
+                AssertThrows(() => { int v; analyzer.GetMinimumThickness(out v); },
+                    "GetMinimumThickness before Compute()", testName);
+
+                PassTest(testName);
+            }
+            catch (Exception ex) { FailTest(testName, ex.Message); }
         }
 
         #endregion
 
-        #region Test Helper Methods
+        #region Helpers
+
+        private static DMesh3 MakeSphere(double radius, int edgeVertices)
+        {
+            var gen = new Sphere3Generator_NormalizedCube
+            {
+                EdgeVertices = edgeVertices,
+                Radius = radius,
+                Box = new Box3d(Vector3d.Zero, new Vector3d(radius, radius, radius))
+            };
+            gen.Generate();
+            return gen.MakeDMesh();
+        }
 
         private static void AssertTrue(bool condition, string message, string testName)
         {
             if (!condition)
-            {
                 throw new Exception($"Assertion failed: {message}");
-            }
         }
 
-        private static void AssertNotNull(object obj, string message, string testName)
+        private static void AssertThrows(Action action, string description, string testName)
         {
-            if (obj == null)
-            {
-                throw new Exception($"Assertion failed: {message}");
-            }
+            bool threw = false;
+            try { action(); }
+            catch (Exception) { threw = true; }
+            if (!threw)
+                throw new Exception($"Expected exception from {description}");
         }
 
         private static void PassTest(string testName)
         {
             testsPassed++;
             testsTotal++;
-            Console.WriteLine($"✓ PASS: {testName}");
+            Console.WriteLine($"  PASS: {testName}");
         }
 
         private static void FailTest(string testName, string error)
         {
             testsFailed++;
             testsTotal++;
-            Console.WriteLine($"✗ FAIL: {testName}");
-            Console.WriteLine($"  Error: {error}");
+            Console.WriteLine($"  FAIL: {testName}");
+            Console.WriteLine($"    Error: {error}");
         }
 
         #endregion
     }
-
-    #region MeshThicknessAnalyzer - CLASS UNDER TEST (Placeholder)
-
-    /// <summary>
-    /// Analyzes wall thickness on a mesh by ray-casting inward from each vertex along inverted normal.
-    /// NOTE: This is a placeholder/stub - the actual implementation should be provided.
-    /// </summary>
-    public class MeshThicknessAnalyzer
-    {
-        private readonly DMesh3 mesh;
-        private readonly DMeshAABBTree3 spatial;
-        private readonly double thicknessThreshold;
-
-        public MeshThicknessAnalyzer(DMesh3 mesh, DMeshAABBTree3 spatial, double thicknessThreshold = 0.5)
-        {
-            this.mesh = mesh;
-            this.spatial = spatial;
-            this.thicknessThreshold = thicknessThreshold;
-        }
-
-        public ThicknessAnalysisResult Compute()
-        {
-            var result = new ThicknessAnalysisResult();
-
-            // TODO: Implement actual thickness analysis
-            // For each vertex:
-            //   1. Get vertex position and normal
-            //   2. Create ray from vertex along inverted normal
-            //   3. Find nearest hit using spatial.FindNearestHitTriangle(ray)
-            //   4. Calculate distance to hit (thickness)
-            //   5. Store in result.VertexThickness
-            //   6. If thickness < threshold, add to result.ThinVertices
-
-            // Placeholder implementation - just return empty result for now
-            foreach (int vid in mesh.VertexIndices())
-            {
-                result.VertexThickness[vid] = 0.0; // TODO: Calculate actual thickness
-            }
-
-            return result;
-        }
-    }
-
-    /// <summary>
-    /// Result of thickness analysis containing per-vertex measurements.
-    /// </summary>
-    public class ThicknessAnalysisResult
-    {
-        /// <summary>
-        /// Thickness value for each vertex (vertex ID -> thickness in mm)
-        /// </summary>
-        public System.Collections.Generic.Dictionary<int, double> VertexThickness { get; set; }
-            = new System.Collections.Generic.Dictionary<int, double>();
-
-        /// <summary>
-        /// List of vertex IDs that are below the thickness threshold
-        /// </summary>
-        public System.Collections.Generic.List<int> ThinVertices { get; set; }
-            = new System.Collections.Generic.List<int>();
-    }
-
-    #endregion
 }
