@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net6.0;net5.0;netcoreapp3.1</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>g3.tests</RootNamespace>
+    <AssemblyName>MeshThicknessAnalyzerTests</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference the main geometry3Sharp library -->
+    <ProjectReference Include="../geometry3Sharp_netstandard.csproj" />
+  </ItemGroup>
+
+</Project>
